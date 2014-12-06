@@ -17,10 +17,14 @@ module CRLSet
 
   module_function
 
+  ###################################
+
   def fetch
     url = request_url
-    gupdate = fetch_update_info(url)
-    crlset = fetch_crlset(gupdate)
+    xml = FileCache.cache("crlset-update.xml"){ fetch_update_info(url) }
+    gupdate = parse_update_info(xml)
+    data = FileCache.cache("crlset.data"){ fetch_crlset(gupdate) }
+    crlset = extract_crlset(data)
     return crlset
   end
 
@@ -69,7 +73,10 @@ module CRLSet
   end
 
   def fetch_update_info(url)
-    data = open(url){|f| f.read }
+    return open(url){|f| f.read }
+  end
+
+  def parse_update_info(data)
     doc = Nokogiri::XML(data)
     doc.remove_namespaces!
 
@@ -102,14 +109,16 @@ module CRLSet
 
   def fetch_crlset(gupdate)
     puts "Downloading CRLSet version %d" % gupdate.app.updatecheck.version
-
     data = open(gupdate.app.updatecheck.codebase){|f| f.read }
     hash = Base64.encode64(Digest::SHA1.digest(data)).chomp
     if data.bytesize != gupdate.app.updatecheck.size.to_i ||
       hash != gupdate.app.updatecheck.hash
       raise "Downloaded data size or digest is mismatched"
     end
+    return data
+  end
 
+  def extract_crlset(data)
     magic, ver, pkeylen, siglen = data.unpack("a4VVV")
     hdlen = 16
     if magic != "Cr24" || int(ver) < 0 || int(pkeylen) < 0 || int(siglen) < 0
@@ -149,7 +158,29 @@ module CRLSet
   end
 end
 
+module FileCache
+  class <<self
+    def enabled?
+      @enabled == true
+    end
+
+    def enabled=(val)
+      @enabled = val
+    end
+
+    def cache(filename)
+      if enabled? && File.exist?(filename)
+        return File.read(filename, encoding: "binary")
+      end
+      data = yield
+      File.write(filename, data)
+      return data
+    end
+  end
+end
+
 if __FILE__ == $0
+  FileCache.enabled = true
   case ARGV[0]
   when "fetch"
     File.open(ARGV[1], "w") do |f|
@@ -159,5 +190,7 @@ if __FILE__ == $0
     data = File.read(ARGV[1])
     data.force_encoding("binary")
     CRLSet.dump(data)
+  else
+    raise "unknown command: %s" % ARGV[0]
   end
 end
