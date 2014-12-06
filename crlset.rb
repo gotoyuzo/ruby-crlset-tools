@@ -136,6 +136,13 @@ module CRLSet
     end
     zipbytes = data[hdlen + pkeylen + siglen .. -1]
 
+    digest = Digest::SHA256.hexdigest(pkeybytes)[0,32]
+    tweaked_digest =
+      digest.each_byte.map{|c| c<97 ? c+49 : c+10 }.map(&:chr).join
+    if tweaked_digest != AppId
+      raise "Public key mismatch (%s)" % tweaked_digest
+    end
+
     pkey = OpenSSL::PKey::RSA.new(pkeybytes)
     unless pkey.verify(OpenSSL::Digest::SHA1.new, sigbytes, zipbytes)
       raise "Signature verification failure"
