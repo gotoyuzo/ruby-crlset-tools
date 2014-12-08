@@ -6,6 +6,28 @@ require "nokogiri"
 require "zip"
 
 module CRLSet
+  class <<self
+    attr_accessor :cache_enabled
+
+    def fetch_data(url)
+      if cache_enabled 
+        filename = "cache:" + Digest::SHA1.hexdigest(url)
+        if File.exist?(filename)
+          return File.read(filename, encoding: "binary")
+        end
+        data = open(url){|f| f.read }
+        File.write(filename, data)
+      else
+        data = open(url){|f| f.read }
+      end
+      return data
+    end
+  end
+
+  def fetch_data(url)
+    self.class.fetch_data(url)
+  end
+
   Host = "clients2.google.com"
   Path = "/service/update2/crx"
   AppId = "hfnkpimlhhgieaddgfemjhofmfblmnib"
@@ -17,13 +39,13 @@ module CRLSet
 
   module_function
 
-  ###################################
-
   def fetch
     url = request_url
-    xml = FileCache.cache("crlset-update.xml"){ fetch_update_info(url) }
+    puts "Downloading Update data"
+    xml = fetch_update_info(url)
     gupdate = parse_update_info(xml)
-    data = FileCache.cache("crlset.data"){ fetch_crlset(gupdate) }
+    puts "Downloading CRLSet version %d" % gupdate.app.updatecheck.version
+    data = fetch_crlset(gupdate)
     crlset = extract_crlset(data)
     return crlset
   end
@@ -73,7 +95,7 @@ module CRLSet
   end
 
   def fetch_update_info(url)
-    return open(url){|f| f.read }
+    return fetch_data(url)
   end
 
   def parse_update_info(data)
@@ -108,8 +130,7 @@ module CRLSet
   end
 
   def fetch_crlset(gupdate)
-    puts "Downloading CRLSet version %d" % gupdate.app.updatecheck.version
-    data = open(gupdate.app.updatecheck.codebase){|f| f.read }
+    data = fetch_data(gupdate.app.updatecheck.codebase)
     hash = Base64.encode64(Digest::SHA1.digest(data)).chomp
     if data.bytesize != gupdate.app.updatecheck.size.to_i ||
       hash != gupdate.app.updatecheck.hash
@@ -165,29 +186,8 @@ module CRLSet
   end
 end
 
-module FileCache
-  class <<self
-    def enabled?
-      @enabled == true
-    end
-
-    def enabled=(val)
-      @enabled = val
-    end
-
-    def cache(filename)
-      if enabled? && File.exist?(filename)
-        return File.read(filename, encoding: "binary")
-      end
-      data = yield
-      File.write(filename, data)
-      return data
-    end
-  end
-end
-
 if __FILE__ == $0
-  FileCache.enabled = true
+  CRLSet.cache_enabled = false
   case ARGV[0]
   when "fetch"
     File.open(ARGV[1], "w") do |f|
